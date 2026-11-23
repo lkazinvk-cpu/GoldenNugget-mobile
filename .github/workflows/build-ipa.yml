@@ -1,0 +1,67 @@
+name: Build GoldenNugget IPA from parts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Reassemble source and build unsigned IPA
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Reassemble and extract source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          for part in parte-000 parte-001 parte-002 parte-003 parte-004; do
+            test -s "$part" || { echo "Missing or empty file: $part" >&2; exit 1; }
+          done
+          cat parte-000 parte-001 parte-002 parte-003 parte-004 > "$RUNNER_TEMP/GoldenNugget-source.tar.gz"
+          tar -tzf "$RUNNER_TEMP/GoldenNugget-source.tar.gz" >/dev/null
+          tar -xzf "$RUNNER_TEMP/GoldenNugget-source.tar.gz" -C "$GITHUB_WORKSPACE"
+          test -f GoldenNugget-mobile-9.7.7/scripts/build-ipa.sh
+
+      - name: Check Xcode toolchain
+        working-directory: GoldenNugget-mobile-9.7.7
+        run: bash scripts/check-xcode-toolchain.sh
+
+      - name: Install pinned XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/xcodegen"
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$DEST"
+          echo "$DEST/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Generate Xcode project
+        working-directory: GoldenNugget-mobile-9.7.7
+        run: |
+          xcodegen --version
+          xcodegen generate
+
+      - name: Build unsigned IPA
+        working-directory: GoldenNugget-mobile-9.7.7
+        run: ./scripts/build-ipa.sh Release
+
+      - name: Check localization catalog
+        working-directory: GoldenNugget-mobile-9.7.7
+        run: python3 scripts/sync-localizations.py --check
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldenNuggetMobile-unsigned-IPA
+          path: GoldenNugget-mobile-9.7.7/build/GoldenNuggetMobile.ipa
+          if-no-files-found: error
+          retention-days: 7
